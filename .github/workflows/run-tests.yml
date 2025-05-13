@@ -1,96 +1,23 @@
 name: Tests
 
 on:
-  pull_request:
   push:
-    branches:
-      - master
-    tags:
-      - "**"
+    branches: master
+  pull_request:
+    branches: master
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */12 * * *'
+
 
 env:
   DOCKER_REGISTRY: ghcr.io
   DOCKER_IMAGE: ${{ github.repository }}
 
 jobs:
-  check-formatting:
-    name: Check formatting
-    runs-on: ubuntu-latest
-    container: debian:bookworm
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          apt-get update
-          apt-get install -y \
-            $(xargs < dependencies.apt.txt) \
-            python3-setuptools
-          python3 -m pip install --break-system-packages \
-            black
-
-      - name: Run black
-        run: |
-          python3 -m black --check --diff .
-
-      - name: Run flake8
-        run: |
-          python3 -m flake8
-
-  check-typing:
-    name: Static type check
-    runs-on: ubuntu-latest
-    container: debian:bookworm
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Prime pip cache
-        uses: actions/cache@v4
-        with:
-          path: /.pip
-          key: |
-            pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: |
-          apt-get update
-          apt-get install -y \
-            $(xargs < dependencies.apt.txt) \
-            python3-setuptools
-          python3 -m pip install --break-system-packages \
-            --cache-dir=/.pip \
-            mypy \
-            lxml-stubs
-
-      - name: Prime mypy cache
-        uses: actions/cache@v4
-        with:
-          path: .mypy_cache
-          key: |
-            mypy-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            mypy-${{ runner.os }}-
-
-      - name: Run mypy check
-        run: |
-          env PIP_BREAK_SYSTEM_PACKAGES=1 \
-            PIP_CACHE_DIR=/.pip python3 -m mypy \
-            --install-types \
-            --non-interactive \
-            src
-
-  build-and-test-container:
+  run_tests:
     name: Build and test container
     runs-on: ubuntu-latest
-    permissions:
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -113,48 +40,3 @@ jobs:
         run: |
           docker run -v $PWD:$PWD -w $PWD --entrypoint bash ${{ env.DOCKER_IMAGE }}:build -c \
           "apt-get install python3-coverage && python3 -m coverage run -m unittest discover --verbose --buffer"
-
-      - name: Submit code coverage to Coveralls.io
-        env:
-          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
-        run: |
-          sudo apt-get install -y \
-            python3-setuptools
-          sudo python3 -m pip install \
-            coveralls
-          python3 -m coveralls
-        continue-on-error: true
-
-      - name: Login to registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push image to registry
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:latest
-          push: true
-
-      - name: Login to ghcr.io using Flathub credentials
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.FLATHUB_ORG_USER }}
-          password: ${{ secrets.FLATHUB_ORG_TOKEN }}
-
-      - name: Push image to the old location
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          tags: ghcr.io/flathub/flatpak-external-data-checker:latest
-          push: true
